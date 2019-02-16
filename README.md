@@ -80,17 +80,17 @@ the 32 bit CPU from 13510 to 11864 gates.  The following rules are used:
     Demorgan's law: a+!(b*c)=a+!b+!c, a*!(b+c)=a*!b*!c
 
 This optimizer isn't all that powerful compared to the 1992 version which
-implemented Quine–McCluskey https://en.wikipedia.org/wiki/Quine%E2%80%93McCluskey_algorithm
+implemented the [Quine–McCluskey algorithm](https://en.wikipedia.org/wiki/Quine%E2%80%93McCluskey_algorithm)
 
 ## OpCodes
 
 The final output is a list of single bit Boolean expressions stored in a tree
 structure.  Each node of the tree can represent a constant, parameter, math
-operation, terminal, or expression.  Symbolic information is recorded so the 
+operation, terminal, or expression.  Symbolic information is recorded so the
 simulator can show the inputs, output, and "local variable" names.   During
-gate synthesis, many thousands of anonymous expressions are created and they 
-are assigned names, such as `X3999`.  You can view the final output from the 
-main menu by clicking Simulate...View Code.  Here is a sample of the output from 
+gate synthesis, many thousands of anonymous expressions are created and they
+are assigned names, such as `X3999`.  You can view the final output from the
+main menu by clicking Simulate...View Code.  Here is a sample of the output from
 the 32 bit CPU:
 
     ...
@@ -113,11 +113,177 @@ Simulating is straight forward, and that's all I'll say about the implementation
 What's really needed now is an automated unit test system.  Manually testing
 the CPU for each instruction is tedious, time consuming, and prone to error.  
 
+## Bit, the Language
 
+The BIT hardware description language is based on Boolean algebra, where logic 
+signals can carry two values: TRUE or FALSE.  All logic circuits are boiled down
+to the basic Boolean operators:  NOT, AND, OR, and XOR (exclusive OR). 
 
+The basic building block in BIT is the BOX.  A box is a re-usable circuit that 
+performs a Boolean calculation.  For instance:
 
+    // Single bit adder with carry in and out
+    box Add1(in a, in b, in c, out answer, out carry) is
+        answer = a # b # c;        // Use XOR to calculate the result
+        carry = a*b + a*c + b*c;   // Use AND and OR to calculate the carry
+    end
 
+The circuit above takes three inputs (a, b, and c) and generates a two bit sum.
+This is called a full adder.  For more information about full adders, visit
+[Wikipedia's Full Adder Page](https://en.wikipedia.org/wiki/Adder_%28electronics%29en.wikipedia.org/wiki/Adder_%28electronics%29).
+Boxes can be composed of other boxes, so a 4 bit adder `RippleAdd4` could be
+created like this:
 
+    // A 4 bit ripple adder (very slow)
+    box RippleAdd4(in cin, in left[4], in right[4], out answer[4], out carryOut) is
+        bit carrys[3];
+        Add1(left[0], right[0], cin, answer[0], carrys[0]);
+        Add1(left[1], right[1], carrys[0], answer[1], carrys[1]);
+        Add1(left[2], right[2], carrys[1], answer[2], carrys[2]);
+        Add1(left[3], right[3], carrys[2], answer[3], carryOut);
+    end
 
+Obviously, we won't be using slow ripple adders in a high performance CPU.  We'll use
+a [Carry-lookahead adder](https://en.wikipedia.org/wiki/Carry-lookahead_adder) instead.
+Here is an example of the `if`...`elif`...`else`...`end` statement, which uses the
+*sum of products* to calculate `AlignBus32In`.
 
+    // Align the bus input on an int/short/byte - BIG ENDIAN
+    //      byte: True if the reading a byte, false for short or int
+    //      word: True if reading a short, false if int
+    //      address: Last two bits of the address being read
+    //      dataIn: The 32 bit int read from the address (divisible by 4)
+    // RETURNS: The bus data re-aligned for the given type and address
+    // NOTE: Data must be aligned properly for the given type
+    // (int on 4 byte boundary, short on 2 byte boundary, byte anywhere)
+    box AlignBus32In[32](in byte, in word, in address[2], in dataIn[32]) is
+        bit zWord[16] = 0[0:16];
+        bit zByte[8] = 0[0:8];
+        if (byte)
+            // 8 bit value (byte)
+            if (address == 0)
+                AlignBus32In = set(zByte, zByte, zByte, dataIn[24:8]);
+            elif (address == 1)
+                AlignBus32In = set(zByte, zByte, zByte, dataIn[16:8]);
+            elif (address == 2)
+                AlignBus32In = set(zByte, zByte, zByte, dataIn[8:8]);
+            else
+                AlignBus32In = set(zByte, zByte, zByte, dataIn[0:8]);
+            end
+        elif (word)
+            // 16 bit value (short)
+            if (address[1] == 0)
+                AlignBus32In = set(zWord, dataIn[16:16]);
+            else
+                AlignBus32In = set(zWord, dataIn[0:16]);
+            end
+        else
+            // 32 bit value (int)
+            AlignBus32In = dataIn;
+        end
+    end
 
+## The CPU
+
+No hardware description language is complete without a CPU, so here it is.
+First, this is what an assembly language program would look like:
+
+    // CRC Example (in C)
+    uint Crc32(uint crc, uint *table, byte *buffer, int length)
+    {
+        while(--length >= 0)
+            crc = table[((crc >> 24) ^ *buffer++)] ^ (crc << 8);
+    }
+
+    // CRC Example (in Assembly Language)
+    #define crc     r0
+    #define table   r1
+    #define buffer  r2
+    #define length  r3
+
+    44030001    sub     length,1
+    0Cxxxxxx    bslt    crc_done            // Branch signed less than
+            crc_loop:
+    50240018    usr     r4,crc,24           // r4 = ((uint)crc >> 24)
+    4C544202    xor.b   r4,[buffer++]       // r4 = r4 ^ *buffer++
+    4D000008    sl      crc,8		
+    4C601482    xor     crc,[table+r4*4]
+    44040001    sub     length,1
+    0Dxxxxxx    bsge    crc_loop            // Branch signed greater than or equal
+             crc_done:
+    404F4490    ld      pc,rlink            // Return to subroutine
+
+And this the CPU assembly language quick reference card:
+
+    There are 16 general purpose 32 bit registers:
+        0..13       General purpose registers (R0..R13)
+        14 = S      Stack (mostly by convention, not because it's very special)
+        15 = PC     Program counter
+
+    Extended registers (when X bit is set):
+        0 = CC      Condition Codes
+        1 = LR      Link register (used to return from subroutine)
+        2..12       Reserved (will be used for interrupts)
+        13..15      Map to general purpose registers (R13, S, PC)
+
+    Push/Pop
+    0000001P ######## ######## ########
+        02:Push   r0..r15,cc,link
+	    03:Pop    cc,link,r15..r0 **(Sorry, pop not yet implemented)**
+
+    Conditional Branches, Jumps, and Jump to Subroutine
+    001CCCCC ######## ######## ######## [optional immediate word]
+        C = 20:BRN          21:BRA          22:BEQ          23:BNE
+            24:BCS/BULT     25:BCC/BUGE     26:BVS          27:BVC
+            28:BMI          29:BPL          2A:BULE         2B:BUGT
+            2C:BSLT         2D:BSGE         2E:BSLE         2F:BSGT
+            30:JSR #        Jump to subroutine (absolute)
+            31:BSR #        Branch to subroutine (relative to PC)
+        # = 24 bit signed value times 4, or 0x800000 for immediate value follows
+        NOTE: ALU instruction 0x56 is also a jump to subroutine (e.g LD.J PC,[R0+R2*4])
+
+    ALU integer op-code chart:
+            40:LD           41:ST           42:ADD          43:ADC
+            44:SUB          45:SUBC         46:SUBR         47:SUBRC
+            48:CMP          49:BIT          4A:AND          4B:OR
+            4C:XOR          4D:SL           4E:SLC          4F:SR
+            50:USR          51:SRC          52:MIN          53:UMIN
+            54:MAX          55:UMAX         56:LD.J
+
+    CPU Instruction Modes (for ALU instructions listed above):
+    01CCCCCC    MMMMDDDD    [see below for next 16 bits]
+        C: Alu operation (see ALU integer chart above)
+        M: Mode, the next 16 bits are defined as follows:
+            0: ######## ########    D = D op #16u
+            1: ######## ########    D = D op #~16u
+            2: SSSS#### ########    D = S op #12
+            3: SSSS#### TTTx####    D = S op #8             [#32 follows when 0x80]
+            4: SSSSRRRR TTTx0nnn    D = S op (R<<n)
+            5: SSSSRRRR TTTx0iii    D = S op [R]            iii = [++R],[--R],[R++],[R--]
+            6: SSSSRRRR TTTx0nnn    D = D op [S+(R<<n)]
+            7: SSSSRRRR TTT#####    D = S op [R+#~5ux]      [#32 follows when 0]
+            8: SSSSRRRR TTT#####    D = S op [R+#5ux]
+            9: SSSSRRRR TTT#####    D = S op [R+#5ux+32x]
+            A: SSSSRRRR TTT#####    D = S op [R+#5ux+64x]
+            B: SSSSRRRR TTT#####    D = S op [R+#5ux+96x]
+            C: ####RRRR TTT#####    D = D op [R+#9ux]
+            D: ####RRRR TTT#####    D = D op [R+#9ux+512x]
+            E: ####RRRR TTT#####    D = D op ->[R+#9ux]     [#32 follows when 0x1F]
+            F: Reserved for future
+        D: Destination register (and source register 1 for two register operations)
+        S: Source register 1
+        R: Source register 2
+        n: Three bit number to shift left (unused if the ALU operation is a shift)
+        i: Pre/post inc/dec, i = (0:[++R], 1:[--R], 2:[R++], 3:[R--], 4:[R])
+        x: Use extended registers (r0, r1, cc, link, ... s, pc)
+        T: Type - sbyte,byte,short,ushort,int,(reserved for future: float,long,double)
+                  NOTE: The right hand operand is sign extended (or zero filled) before
+                  the ALU operation.  The ALU operation is always performed as a 32
+                  bit integer operation.  The ALU output can be sign extended (or
+                  zero filled) by setting the E bit.    #16u = unsigned 16 bit number
+        #~16u = unsigned 16 bit number | 0xFFFF0000 - always negative
+        #12 (and #7) = signed 12 bit (or 7 bit) number
+        #~5ux = (5 bit unsigned number | 0xFFFFFFe0) * sizeof(type) - always negative
+        #5ux = 5 bit unsigned number * sizeof(type)
+            NOTE: +32x, +64x, +96x = the number * sizeof(type)
+        #9ux = 9 bit unsigned number * sizeof(type)
