@@ -1,0 +1,1371 @@
+// Copyright 2011-2019 by Jeremy Spiller
+// See Lincense.txt for details
+//
+// CLOCK:
+//
+//    CPU Cycle       |   CPU Cycle      |   CPU Cycle     |
+// __________         |_________         |_________        |_________
+//    CPU    \________/   CPU   \________/   CPU   \_______/   CPU
+//    WORK   |        |   WORK  |            WORK              WORK
+//           |CPU     |   |     |
+//           |outputs |   |     + RW/Addr/Data output/State
+//           |are     |   |     + State change
+//           |locked  |   |
+//           |and     |   +-- new data/addr ready (not on bus)
+//           |stable  |   +-- nextState, newAddr, locked
+//                    |
+//                    +-- Data input locked on read
+
+
+// --------------------------------------------------------------------------
+// Standard RS flip-flop.
+// 		s - Active low (when it goes low, the output is set)
+//		r - Active low (when it goes low, the output is reset)
+// s and r should never be low at the same time
+// --------------------------------------------------------------------------
+box RSFF(in s, in r, out q, out notQ) is
+	// Standard RS flip-flop
+	q = !(s*notQ);
+	notQ = !(r*q);
+end
+  
+
+// --------------------------------------------------------------------------
+// Gated latch, with enable high data pass through.
+// When enable is true, data passes through.  When enable
+// is low, the data is locked and holds its previous value.
+// --------------------------------------------------------------------------
+box Latch1[1](in enable, in data) is
+	bit s = !(enable*data);
+	bit r = !(enable*s);
+	RSFF(s, r, Latch1[0], unused);
+end
+
+
+// --------------------------------------------------------------------------
+// A 4 bit gated latch, with enable high data pass through.
+// When enable is true, data passes through.  When enable
+// is low, the data is locked and holds its previous value.
+// --------------------------------------------------------------------------
+box Latch4[4](in enable, in data[4]) is
+	Latch4[0] = Latch1(enable, data[0]);
+	Latch4[1] = Latch1(enable, data[1]);
+	Latch4[2] = Latch1(enable, data[2]);
+	Latch4[3] = Latch1(enable, data[3]);
+end
+
+// --------------------------------------------------------------------------
+// An 8 bit gated latch, with enable high data pass through.
+// When enable is true, data passes through.  When enable
+// is low, the data is locked and holds its previous value.
+// --------------------------------------------------------------------------
+box Latch8[8](in enable, in data[8]) is
+	Latch8[0:4] = Latch4(enable, data[0:4]);
+	Latch8[4:4] = Latch4(enable, data[4:4]);
+end
+
+// --------------------------------------------------------------------------
+// A 32 bit gated latch, with enable high data pass through.
+// When enable is true, data passes through.  When enable
+// is low, the data is locked and holds its previous value.
+// --------------------------------------------------------------------------
+box Latch32[32](in enable, in data[32]) is
+	Latch32[0:8] = Latch8(enable, data[0:8]);
+	Latch32[8:8] = Latch8(enable, data[8:8]);
+	Latch32[16:8] = Latch8(enable, data[16:8]);
+	Latch32[24:8] = Latch8(enable, data[24:8]);
+end
+
+// --------------------------------------------------------------------------
+// A 64 bit gated latch, with enable high data pass through.
+// When enable is true, data passes through.  When enable
+// is low, the data is locked and holds its previous value.
+// --------------------------------------------------------------------------
+box Latch64[64](in enable, in data[64]) is
+	Latch64[0:32] = Latch32(enable, data[0:32]);
+	Latch64[32:32] = Latch32(enable, data[32:32]);
+end
+
+
+// --------------------------------------------------------------------------
+// Classical edge triggered D flip-flop, with positive edge trigger.
+// On the rising edge of the clock, the data is locked in and passed
+// through to the output.  At all other times, the previous value is used.
+// See http://en.wikipedia.org/wiki/Flip-flop_(electronics)
+// --------------------------------------------------------------------------
+box DFF[1](in clock, in data) is
+	// Use three RS flip-flops to compose an edge triggered flip flop
+	bit r;	
+	bit s;	
+	bit notD; 
+	// When clock is low, both S and R are high, and the 
+	// last flip-flop retains its value.
+	RSFF(notD, clock, unused, s);		// Generate active low S signal
+	RSFF(clock*s, data, r, notD);		// Generate active low R signal
+	RSFF(s, r, DFF[0], unused);		// Output flip flop
+end
+
+// --------------------------------------------------------------------------
+// An 8 bit register with positive edge trigger.  
+// On the rising edge of the clock, the data is locked in (and passed through)
+// --------------------------------------------------------------------------
+box Register8[8](in clock, in data[8]) is
+	Register8[0] = DFF(clock, data[0]);
+	Register8[1] = DFF(clock, data[1]);
+	Register8[2] = DFF(clock, data[2]);
+	Register8[3] = DFF(clock, data[3]);
+	Register8[4] = DFF(clock, data[4]);
+	Register8[5] = DFF(clock, data[5]);
+	Register8[6] = DFF(clock, data[6]);
+	Register8[7] = DFF(clock, data[7]);
+end
+
+// --------------------------------------------------------------------------
+// A 32 bit register with positive edge trigger.  
+// On the rising edge of the clock, the data is locked in (and passed through)
+// --------------------------------------------------------------------------
+box Register32[32](in clock, in data[32]) is
+	Register32[0:8] = Register8(clock, data[0:8]);
+	Register32[8:8] = Register8(clock, data[8:8]);
+	Register32[16:8] = Register8(clock, data[16:8]);
+	Register32[24:8] = Register8(clock, data[24:8]);
+end
+
+
+// --------------------------------------------------------------------------
+// A 64 bit register with positive edge trigger.  
+// On the rising edge of the clock, the data is locked in (and passed through)
+// --------------------------------------------------------------------------
+box Register64[64](in clock, in data[64]) is
+	Register64[0:32] = Register32(clock, data[0:32]);
+	Register64[32:32] = Register32(clock, data[32:32]);
+end
+
+
+// --------------------------------------------------------------------------
+// Demultiplex a nibble (generate 16 outputs, based on the input number)
+// This takes 52 gates, but is fast (3 gate delays)
+// --------------------------------------------------------------------------
+box DeMux4[16](in state[4]) is
+	DeMux4[0] = state == 0;
+	DeMux4[1] = state == 1;
+	DeMux4[2] = state == 2;
+	DeMux4[3] = state == 3;
+	DeMux4[4] = state == 4;
+	DeMux4[5] = state == 5;
+	DeMux4[6] = state == 6;
+	DeMux4[7] = state == 7;
+	DeMux4[8] = state == 8;
+	DeMux4[9] = state == 9;
+	DeMux4[10] = state == 10; 
+	DeMux4[11] = state == 11;
+	DeMux4[12] = state == 12;
+	DeMux4[13] = state == 13;
+	DeMux4[14] = state == 14;
+	DeMux4[15] = state == 15;
+end
+
+// --------------------------------------------------------------------------
+// Demultiplex a nibble (generate 16 outputs, based on the input number)
+// This takes 28 gates, but is slower (5 gate delays)
+// This is what you might get when you use sub-expression elimination
+// --------------------------------------------------------------------------
+box DeMux4_SmallAndSlow[16](in state [4]) is
+	bit a[4];
+	bit b[4];
+	a[0] = state[0:2] == 0;		b[0] = state[2:2] == 0;
+	a[1] = state[0:2] == 1;		b[1] = state[2:2] == 1;
+	a[2] = state[0:2] == 2;		b[2] = state[2:2] == 2;
+	a[3] = state[0:2] == 3;		b[3] = state[2:2] == 3;
+	DeMux4_SmallAndSlow[0:4] = a*dup(b[0]);
+	DeMux4_SmallAndSlow[4:4] = a*dup(b[1]);
+	DeMux4_SmallAndSlow[8:4] = a*dup(b[2]);
+	DeMux4_SmallAndSlow[12:4] = a*dup(b[3]);
+end
+
+box DeMux5[32](in state[5]) is
+	bit demux4[16] = DeMux4(state[0:4]);
+	DeMux5[0:16] = dup(!state[4]) * demux4;
+	DeMux5[16:16] = dup(state[4]) * demux4;
+end
+
+
+// --------------------------------------------------------------------------
+// Single bit adder with carry in and out
+// --------------------------------------------------------------------------
+box Add1(in a, in b, in c, out answer, out carry) is
+	answer = a # b # c;
+	carry = a*b + a*c + b*c;
+end
+
+// --------------------------------------------------------------------------
+// A slow 8 bit ripple adder - see the ripples
+// --------------------------------------------------------------------------
+box RippleAdd8(in cin, in left[8], in right[8], out answer[8], out carryOut) is
+	bit carrys[7];
+	Add1(left[0], right[0], cin, answer[0], carrys[0]);
+	Add1(left[1], right[1], carrys[0], answer[1], carrys[1]);
+	Add1(left[2], right[2], carrys[1], answer[2], carrys[2]);
+	Add1(left[3], right[3], carrys[2], answer[3], carrys[3]);
+	Add1(left[4], right[4], carrys[3], answer[4], carrys[4]);
+	Add1(left[5], right[5], carrys[4], answer[5], carrys[5]);
+	Add1(left[6], right[6], carrys[5], answer[6], carrys[6]);
+	Add1(left[7], right[7], carrys[6], answer[7], carryOut);
+end
+	
+
+// --------------------------------------------------------------------------
+// A slow 32 bit ripple adder - see the ripples
+// --------------------------------------------------------------------------
+box RippleAdd32(in cin, in left[32], in right[32], out answer[32], out carryOut) is
+	bit carrys[3];
+	RippleAdd8(cin, left[0:8], right[0:8], answer[0:8], carrys[0]);
+	RippleAdd8(carrys[0], left[8:8], right[8:8], answer[8:8], carrys[1]);
+	RippleAdd8(carrys[1], left[16:8], right[16:8], answer[16:8], carrys[2]);
+	RippleAdd8(carrys[2], left[24:8], right[24:8], answer[24:8], carryOut);
+end
+
+ 
+// --------------------------------------------------------------------------
+// Four bit lookahead carry generator (with g/p outputs)
+// http://en.wikipedia.org/wiki/Carry_look-ahead_adder
+// --------------------------------------------------------------------------
+box LahCarryGen4(in cin, in p1[4], in p2[4], out cout[4], out gout, out pout) is
+	bit g[4] = p1*p2;	// Generates a carry
+	bit p[4] = p1+p2;	// Probagates a carry
+	
+	cout[0] = cin;
+	cout[1] = g[0] + cin*p[0];
+	cout[2] = g[1] + g[0]*p[1] + cin*p[0]*p[1];
+	cout[3] = g[2] + g[1]*p[2] + g[0]*p[1]*p[2] + cin*p[0]*p[1]*p[2];
+	pout = p[0]*p[1]*p[2]*p[3];
+	gout = g[3] + g[2]*p[3] + g[1]*p[3]*p[2] + g[0]*p[3]*p[2]*p[1];
+end
+
+// --------------------------------------------------------------------------
+// Four bit lookahead carry generator (with carry output)
+// http://en.wikipedia.org/wiki/Carry_look-ahead_adder
+// --------------------------------------------------------------------------
+box LahCarryGen4c(in cin, in p1[4], in p2[4], out cout[5]) is
+	bit g[4] = p1*p2;	// Generates a carry
+	bit p[4] = p1+p2;	// Probagates a carry
+
+	cout[0] = cin;
+	cout[1] = g[0] + cin*p[0];
+	cout[2] = g[1] + g[0]*p[1] + cin*p[0]*p[1];
+	cout[3] = g[2] + g[1]*p[2] + g[0]*p[1]*p[2] + cin*p[0]*p[1]*p[2];
+	cout[4] = g[3] + g[2]*p[3] + g[1]*p[2]*p[3] + g[0]*p[1]*p[2]*p[3] 
+												+ cin*p[0]*p[1]*p[2]*p[3];
+end
+
+
+// --------------------------------------------------------------------------
+// 32 bit full adder, with lookahead carry generator
+// --------------------------------------------------------------------------
+box LahAdd32(in cin, in a[32], in b[32], out result[32], out cout) is
+	bit g[7]; bit p[7];
+	bit carry[32];
+	LahCarryGen4(cin, b[0:4], a[0:4], carry[0:4], g[0], p[0]);
+	LahCarryGen4(g[0] + cin*p[0], 
+					a[4:4], b[4:4], carry[4:4], g[1], p[1]);
+	LahCarryGen4(	  g[1] 
+					+ g[0]*p[1] 
+					+ cin *p[0]*p[1],
+					a[8:4], b[8:4], carry[8:4], g[2], p[2]);
+	LahCarryGen4(	  g[2] 
+					+ g[1]*p[2] 
+					+ g[0]*p[1]*p[2] 
+					+ cin *p[0]*p[1]*p[2],
+					a[12:4], b[12:4], carry[12:4], g[3], p[3]);
+	LahCarryGen4(     g[3] 
+					+ g[2]*p[3] 
+					+ g[1]*p[2]*p[3] 
+					+ g[0]*p[1]*p[2]*p[3]
+					+ cin *p[0]*p[1]*p[2]*p[3],
+					a[16:4], b[16:4], carry[16:4], g[4], p[4]);
+	LahCarryGen4(     g[4] 
+					+ g[3]*p[4] 
+					+ g[2]*p[3]*p[4] 
+					+ g[1]*p[2]*p[3]*p[4]
+					+ g[0]*p[1]*p[2]*p[3]*p[4]
+					+ cin *p[0]*p[1]*p[2]*p[3]*p[4],
+					a[20:4], b[20:4], carry[20:4], g[5], p[5]);
+	LahCarryGen4(     g[5] 
+					+ g[4]*p[5] 
+					+ g[3]*p[4]*p[5] 
+					+ g[2]*p[3]*p[4]*p[5]
+					+ g[1]*p[2]*p[3]*p[4]*p[5]
+					+ g[0]*p[1]*p[2]*p[3]*p[4]*p[5]
+					+ cin *p[0]*p[1]*p[2]*p[3]*p[4]*p[5],
+					a[24:4], b[24:4], carry[24:4], g[6], p[6]);
+	LahCarryGen4c(     g[6] 
+					+ g[5]*p[6] 
+					+ g[4]*p[5]*p[6] 
+					+ g[3]*p[4]*p[5]*p[6]
+					+ g[2]*p[3]*p[4]*p[5]*p[6]
+					+ g[1]*p[2]*p[3]*p[4]*p[5]*p[6]
+					+ g[0]*p[1]*p[2]*p[3]*p[4]*p[5]*p[6]
+					+ cin *p[0]*p[1]*p[2]*p[3]*p[4]*p[5]*p[6],
+					a[28:4], b[28:4], set(cout, carry[28:4]));
+	result = a # b # carry;
+end
+
+
+
+
+// --------------------------------------------------------------------------
+// Simulate this to see the difference between the ripple
+// and lookahead adders.  See the ripples!!!
+// --------------------------------------------------------------------------
+box TestLahRippleAdder32(in cin, in p1[32], in p2[32], 
+				out rippleResult[32], out rippleCarry,
+				out lahResult[32], out lahCarry) is
+	LahAdd32(cin, p1, p2, lahResult, lahCarry);
+	RippleAdd32(cin, p1, p2, rippleResult, rippleCarry);
+end
+
+// --------------------------------------------------------------------------
+// 64 bit full adder (with 32 bit carry and 64 bit carry)
+// --------------------------------------------------------------------------
+box LahAdd64(in cin, in a[64], in b[64], out result[64], out cout32, out cout64) is
+	LahAdd32(cin, a[0:32], b[0:32], result[0:32], cout32);
+	LahAdd32(cout32, a[32:32], b[32:32], result[32:32], cout64); 
+end
+
+
+// --------------------------------------------------------------------------
+// Add or subtract p1 and p2 (with carry/borrow)
+//		p1 + p2 + cin	(negateP1 and negateP2 are false)
+//		p1 - p2 - cin	(negateP2 is true, carry is a borrow)
+//		p2 - p1 - cin	(negateP1 is true, carry is a borrow)
+//		Invalid			(negateP1 and negateP2 are true)
+// NOTE: Only negateP1 or negateP2 (but not both) may be set, otherwise the
+//		 result is invalid.
+// --------------------------------------------------------------------------
+box LahAddSub32(in negateP1, in negateP2, in cin, in p1[32], in p2[32], 
+				out result[32], out carryOut, out overflow) is
+	// Crate borrow from carry if P1 or P2 is negative
+	// NOTE: To negate, we complement and add 1, so this all works out properly
+	bit carryOrBorrow = negateP1 # negateP2 # cin;
+	bit comP1[32] = dup(negateP1) # p1;
+	bit comP2[32] = dup(negateP2) # p2;
+	bit carryOutFromAdder;
+	LahAdd32(carryOrBorrow, comP1, comP2, result, carryOutFromAdder);
+	
+	// Input signs are the same and output sign is different = overflow
+	// NOTE: 0x00000000 and 0x80000000 special cases cancel out
+	overflow = (comP1[31] == comP2[31]) * (comP1[31] != result[31]);
+	carryOut = carryOutFromAdder  # negateP1 # negateP2;
+end
+
+// --------------------------------------------------------------------------
+// Add or subtract p1 and p2 (with carry/borrow)
+//		p1 + p2 + cin	(negateP1 and negateP2 are false)
+//		p1 - p2 - cin	(negateP2 is true, carry is a borrow)
+//		p2 - p1 - cin	(negateP1 is true, carry is a borrow)
+//		Invalid			(negateP1 and negateP2 are true)
+// NOTE: Only negateP1 or negateP2 (but not both) may be set, otherwise the
+//		 result is invalid.
+// --------------------------------------------------------------------------
+box LahAddSub64(in negateP1, in negateP2, in cin, in p1[64], in p2[64], 
+				out result[64], out carryOut32, out overflow32, 
+				out carryOut64, out overflow64) is
+	// Crate borrow from carry if P1 or P2 is negative
+	// NOTE: To negate, we complement and add 1, so this all works out properly
+	bit carryOrBorrow = negateP1 # negateP2 # cin;
+	bit comP1[64] = dup(negateP1) # p1;
+	bit comP2[64] = dup(negateP2) # p2;
+	bit cout32;
+	bit cout64;
+	LahAdd64(carryOrBorrow, comP1, comP2, result, cout32, cout64);
+	
+	// Input signs are the same and output sign is different = overflow
+	// NOTE: 0x00000000 and 0x80000000 special cases cancel out
+	overflow32 = (comP1[31] == comP2[31]) * (comP1[31] != result[31]);
+	overflow64 = (comP1[63] == comP2[63]) * (comP1[63] != result[63]);
+	carryOut32 = cout32  # negateP1 # negateP2;
+	carryOut64 = cout64  # negateP1 # negateP2;
+end
+
+
+// --------------------------------------------------------------------------
+// Generate a shift left mask, with 1's wherever data has been shifted out:
+//		n << 0 = 0b00000000000000000000000000000000
+//		n << 1 = 0b00000000000000000000000000000001
+//		n << 2 = 0b00000000000000000000000000000011
+//		n << 3 = 0b00000000000000000000000000000111, etc...
+// The equation for each bit is: ShiftMask32[i] = i > p
+// NOTE: ShiftMask32[31] is always zero (since i > p is false for p=31)
+// --------------------------------------------------------------------------
+box ShiftMask32[32](in p[5]) is
+	ShiftMask32[0] = p[4] + p[3] + p[2] + p[1] + p[0];
+	ShiftMask32[1] = p[4] + p[3] + p[2] + p[1];
+	ShiftMask32[2] = p[4] + p[3] + p[2] + p[1]*p[0];
+	ShiftMask32[3] = p[4] + p[3] + p[2];
+	ShiftMask32[4] = p[4] + p[3] + p[2]*p[1] + p[2]*p[0];
+	ShiftMask32[5] = p[4] + p[3] + p[2]*p[1];
+	ShiftMask32[6] = p[4] + p[3] + p[2]*p[1]*p[0];
+	ShiftMask32[7] = p[4] + p[3];
+	ShiftMask32[8] = p[4] + p[3]*p[2] + p[3]*p[1] + p[3]*p[0];
+	ShiftMask32[9] = p[4] + p[3]*p[2] + p[3]*p[1];
+	ShiftMask32[0xA] = p[4] + p[3]*p[2] + p[3]*p[1]*p[0];
+	ShiftMask32[0xB] = p[4] + p[3]*p[2];
+	ShiftMask32[0xC] = p[4] + p[3]*p[2]*p[1] + p[3]*p[2]*p[0];
+	ShiftMask32[0xD] = p[4] + p[3]*p[2]*p[1];
+	ShiftMask32[0xE] = p[4] + p[3]*p[2]*p[1]*p[0];
+	ShiftMask32[0xF] = p[4];
+	ShiftMask32[0x10] = p[4]*p[3] + p[4]*p[2] + p[4]*p[1] + p[4]*p[0];
+	ShiftMask32[0x11] = p[4]*p[3] + p[4]*p[2] + p[4]*p[1];
+	ShiftMask32[0x12] = p[4]*p[3] + p[4]*p[2] + p[4]*p[1]*p[0];
+	ShiftMask32[0x13] = p[4]*p[3] + p[4]*p[2];
+	ShiftMask32[0x14] = p[4]*p[3] + p[4]*p[2]*p[1] + p[4]*p[2]*p[0];
+	ShiftMask32[0x15] = p[4]*p[3] + p[4]*p[2]*p[1];
+	ShiftMask32[0x16] = p[4]*p[3] + p[4]*p[2]*p[1]*p[0];
+	ShiftMask32[0x17] = p[4]*p[3];
+	ShiftMask32[0x18] = p[4]*p[3]*p[2] + p[4]*p[3]*p[1] + p[4]*p[3]*p[0];
+	ShiftMask32[0x19] = p[4]*p[3]*p[2] + p[4]*p[3]*p[1];
+	ShiftMask32[0x1A] = p[4]*p[3]*p[2] + p[4]*p[3]*p[1]*p[0];
+	ShiftMask32[0x1B] = p[4]*p[3]*p[2];
+	ShiftMask32[0x1C] = p[4]*p[3]*p[2]*p[1] + p[4]*p[3]*p[2]*p[0];
+	ShiftMask32[0x1D] = p[4]*p[3]*p[2]*p[1];
+	ShiftMask32[0x1E] = p[4]*p[3]*p[2]*p[1]*p[0];
+	ShiftMask32[0x1F] = 0[0];
+end
+
+// --------------------------------------------------------------------------
+// Generate a shift left mask, with 1's wherever data has been shifted out:
+//		n << 0 = 0b00000000000000000000000000000000
+//		n << 1 = 0b00000000000000000000000000000001
+//		n << 2 = 0b00000000000000000000000000000011
+//		n << 3 = 0b00000000000000000000000000000111, etc...
+// The equation for each bit is: ShiftMask32[i] = i > p
+// NOTE: ShiftMask64[63] is always zero (since i > p is false for p=31)
+// --------------------------------------------------------------------------
+box ShiftMask64[64](in p[6]) is
+	bit shiftMask32[32] = ShiftMask32(p[0:5]);
+	ShiftMask64[0:32] = shiftMask32 + dup(p[5]);
+	ShiftMask64[32:32] = shiftMask32 * dup(p[5]);
+end
+
+
+// --------------------------------------------------------------------------
+// General purpose rotate left (or right) with padding and carry/remainder.
+// Calculates (p1 << p2) or (p1 >> p2) with padding.
+// --------------------------------------------------------------------------
+box Rotate32(in right, in padding, in p1[32], in p2[5], 
+			out result[32], out carryOrRemainder) is
+
+	// When shifting right, negate p2
+	bit p2n[5];
+	p2n[0] = p2[0];
+	p2n[1] = right # p2[1] # right*!p2[0];
+	p2n[2] = right # p2[2] # right*!p2[0]*!p2[1];
+	p2n[3] = right # p2[3] # right*!p2[0]*!p2[1]*!p2[2];
+	p2n[4] = right # p2[4] # right*!p2[0]*!p2[1]*!p2[2]*!p2[3];
+
+	// Shift left with wrap around (will shift right if p2 was negated)
+	bit sh1[32] = !p2n[0] ? p1 : set(p1[0:31], p1[31:1]);
+	bit sh2[32] = !p2n[1] ? sh1 : set(sh1[0:30], sh1[30:2]);
+	bit sh4[32] = !p2n[2] ? sh2 : set(sh2[0:28], sh2[28:4]);
+	bit sh8[32] = !p2n[3] ? sh4 : set(sh4[0:24], sh4[24:8]);
+	bit sh16[32] = !p2n[4] ? sh8 : set(sh8[0:16], sh8[16:16]);
+	
+	// The mask puts a 1 wherever the padding should be
+	// and a 0 wherever the answer should be
+	bit mask32[32] = ShiftMask32(p2n) # dup(right*(p2[0:5] != 0));
+	
+	// Calculate result with padding
+	result =   mask32 ? dup(padding) : sh16;
+	carryOrRemainder = mask32*sh16 != 0;
+end
+
+
+// --------------------------------------------------------------------------
+// ALU op code constants (also used by the CPU)
+// --------------------------------------------------------------------------
+const int ALU_MASK = 0x3F;  // Mask for up to 64 ALU op codes
+const int ALU_LD = 0x00;
+const int ALU_ST = 0x01;
+const int ALU_ADD = 0x02;
+const int ALU_ADC = 0x03;
+const int ALU_SUB = 0x04;
+const int ALU_SUBC = 0x05;
+const int ALU_SUBR = 0x06;
+const int ALU_SUBRC = 0x07;
+const int ALU_CMP = 0x08;
+const int ALU_BIT = 0x09;
+const int ALU_AND = 0x0A;
+const int ALU_OR = 0x0B;
+const int ALU_XOR = 0x0C;
+const int ALU_SL = 0x0D;
+const int ALU_SLC = 0x0E;
+const int ALU_SR = 0x0F;
+const int ALU_USR = 0x10;
+const int ALU_SRC = 0x11;
+const int ALU_MIN = 0x12;
+const int ALU_UMIN = 0x13;
+const int ALU_MAX = 0x14;
+const int ALU_UMAX = 0x15;
+const int ALU_LDJ = 0x16;
+const int ALU_ZERO = 0x1F;  // ALU generates zero
+ 
+// --------------------------------------------------------------------------
+// A 32 bit arithmetic logic unit.  Operation as follows:
+//
+//		0x00:	p2			ld
+//		0x01:	p1			st
+//		0x02:	p1+p2		add
+//		0x03:	p1+p2+c		adc
+//		0x04:	p1-p2		sub
+//		0x05:	p1-p2-c		subc
+//		0x06:	-p1+p2		subr
+//		0x07:	-p1+p2-c	subrc
+//		0x08:	p1-p2		cmp		(CPU does not save result)
+//		0x09:	p1 and p2	bit		(CPU does not save result)
+//		0x0A:	p1 and p2	and
+//		0x0B:	p1 or p2	or
+//		0x0C:	p1 xor p2	xor
+//		0x0D:	p1<<p2		sl		Shift left, pad with 0
+//		0x0E:	p1<<p2		slc		Shift left, pad with carry
+//		0x0F:	p1>>p2		sr		Shift right, pad with sign
+//		0x10:	p1>>p2		usr		Unsigned shift right, pad with 0
+//		0x11:	p1>>p2		src		Shift right, pad with carry
+//		0x12:	min(p1,p2)	min		Minimum value
+//		0x13:	umin(p1,p2)	umin	Unsigned minimum value
+//		0x14:	max(p1,p2)	max		Maximum value
+//		0x15:	umax(p1,p2)	umax	Unsigned maximum value
+//		0x16:	p2			ld.j
+//
+// shiftRight is performed on P2 (but not for any of the shift operations)
+// cin - carry in
+// vin - overflow in
+// c - carry out (calculated for sum operations, unchanged for others)
+// v - overflow out (calculated for sum operations, unchanged for others)
+// n - negative (set if result is negative, reset otherwise)
+// z - zero (set if result is zero, reset otherwise)
+// --------------------------------------------------------------------------
+box ALU32(in op[5], in cin, in vin, 
+		  in p1[32], in p2[32], in shiftP2Left[5], out result[32], 
+		  out c, out v, out n, out z) is
+	
+
+	// Perform 32 bit rotate right/left
+	bit opSL = op == ALU_SL;
+	bit opSLC = op == ALU_SLC;
+	bit opSR = op == ALU_SR;
+	bit opSRC = op == ALU_SRC;
+	bit opUSR = op == ALU_USR;
+	bit isShift = opSL + opSLC + opSR + opSRC + opUSR;
+	bit shiftResult[32];
+	bit shiftCarry;
+	
+	Rotate32(opSR + opSRC + opUSR, // Shift right/left
+			opSLC*cin + opSR*p1[31] + opSRC*cin, // padding
+				(isShift ? p1 : p2), 
+				(isShift ? p2[0:5] : shiftP2Left), 
+				shiftResult, shiftCarry);
+
+
+	// Perform the 32 bit add/subtract
+	bit sumResult[32];
+	bit sumCarry;
+	bit sumOverflow;
+	bit isSub = (op == ALU_SUB) + (op == ALU_SUBC) + (op == ALU_CMP);
+	bit isSubR = (op == ALU_SUBR) + (op == ALU_SUBRC);
+	bit useCarry = ((op == ALU_ADC) + (op == ALU_SUBC) + (op == ALU_SUBRC));
+	bit isSum = isSubR + isSub + (op == ALU_ADC) + (op == ALU_ADD);
+						
+	// Perform min/max
+	bit isMin = (op == ALU_MIN) + (op == ALU_UMIN);
+	bit isMax = (op == ALU_MAX) + (op == ALU_UMAX);
+	bit isMinMax = isMin + isMax;
+	bit isMinMaxSigned = op[0] == ALU_MIN[0];
+	bit p1_LTS_p2 = sumResult[31] # sumOverflow;	// p1 < p2 (signed)
+	bit p1_LTU_p2 = sumCarry;						// p1 < p2 (unsigned)
+	bit p1_LT_p2 = p1_LTS_p2*isMinMaxSigned + p1_LTU_p2*!isMinMaxSigned;
+	bit minmaxUseP1 = p1_LT_p2 # isMax;
+	bit minmax[32] = dup(minmaxUseP1)*p1 + dup(!minmaxUseP1)*shiftResult;
+
+	LahAddSub32(isSubR, isSub + isMinMax, cin * useCarry, p1, shiftResult, 
+				sumResult, sumCarry, sumOverflow);
+
+	
+	// Multiplex the ALU output (33rd bit is the carry)
+	bit result33[33] =
+	 		  set(cin, shiftResult)			* dup((op==ALU_LD)
+	 		  									 +(op==ALU_LDJ))
+	 		+ set(cin, p1)					* dup(op == ALU_ST)
+			+ set(sumCarry, sumResult)		* dup(isSum)
+			+ set(cin, p1 * shiftResult)	* dup((op == ALU_AND) 
+												+ (op == ALU_BIT))
+			+ set(cin, p1 + shiftResult)	* dup(op == ALU_OR)
+			+ set(cin, p1 # shiftResult)	* dup(op == ALU_XOR)
+			+ set(shiftCarry, shiftResult) 	* dup(isShift)
+			+ set(sumCarry, minmax)			* dup(isMinMax);
+			
+	result = result33[0:32];
+	
+	// Save condition codes
+	n = result[31];
+	z = result == 0;
+	v = isSum + isMinMax ? sumOverflow : vin;
+	c = result33[32];
+end
+
+
+// --------------------------------------------------------------------------
+// See if the optimizer can remove unused functions from the ALU
+// --------------------------------------------------------------------------
+box TestOptimizerWithAluAdd(in cin, in p1[32], in p2[32], 
+								out result[32], out c) is
+	ALU32(ALU_ADC[0:5], cin, 0[0], 
+			p1, p2, 0[0:5], result, 
+			c, unused, unused, unused);
+end
+
+
+// --------------------------------------------------------------------------
+// See if the optimizer can remove unused functions from the ALU
+// --------------------------------------------------------------------------
+box TestOptimizerWithAluRotate(in right, in padding, in p1[32], in p2[32], 
+								out result[32], out carryOutOrRemainder) is
+	ALU32(dup(right)*ALU_SRC[0:5] + !dup(right)*ALU_SLC[0:5], 
+			padding, 0[0],
+			p1, p2, 0[0:5], result, 
+			carryOutOrRemainder, unused, unused, unused);
+end
+
+
+// --------------------------------------------------------------------------
+// Branch op-codes.  NOTE: These are ordered so that the least significant
+// bit inverts the condition determined by the top three bits of the op-code.
+// --------------------------------------------------------------------------
+const int BR_N = 0;		// Branch never, also NOP
+const int BR_A = 1;		// Branch always
+const int BR_EQ = 2;
+const int BR_NE = 3;
+const int BR_CS = 4;	// Also BR_ULT
+const int BR_CC = 5;	// Also BR_UGE
+const int BR_VS = 6;
+const int BR_VC = 7;
+const int BR_MI = 8;
+const int BR_PL = 9;
+const int BR_ULE = 10;
+const int BR_UGT = 11;
+const int BR_SLT = 12;
+const int BR_SGE = 13;
+const int BR_SLE = 14;
+const int BR_SGT = 15;
+
+// --------------------------------------------------------------------------
+// Generate a true/false flag based on the op-code and condition codes.
+// --------------------------------------------------------------------------
+box Branch[1](in condition[4], in c, in v, in n, in z) is
+	// NOTE: This depends on the branch op-codes being ordered
+	// so that the least significant bit negates the result of
+	// the top 3 bits. 
+	bit cond3 =   (condition[1:3] == BR_N[1:3])*0[0]
+				+ (condition[1:3] == BR_EQ[1:3])*z
+				+ (condition[1:3] == BR_CS[1:3])*c
+				+ (condition[1:3] == BR_VS[1:3])*v
+				+ (condition[1:3] == BR_MI[1:3])*n
+				+ (condition[1:3] == BR_ULE[1:3])*(c + z)
+				+ (condition[1:3] == BR_SLT[1:3])*(n # v)
+				+ (condition[1:3] == BR_SLE[1:3])*(z + n # v);
+	Branch[0] = cond3 # condition[0];
+end
+
+
+// --------------------------------------------------------------------------
+// Add 4 to a 32 bit field
+// NOTE: The optimizer eliminates a lot of gates
+// --------------------------------------------------------------------------
+box Add4[32](in v[32]) is
+	LahAdd32(0[0], v, 4[0:32], Add4, unused);
+end
+
+// --------------------------------------------------------------------------
+// Extend a signed/unsigned byte or word to an int
+// --------------------------------------------------------------------------
+box Extend32[32](in signed, in byte, in word, in value[32]) is
+	Extend32[0:8] = value[0:8];
+	Extend32[8:8] = byte ? dup(signed * value[7]) : value[8:8];
+	Extend32[16:16] = (byte+word) ? dup(signed * Extend32[15]) : value[16:16];
+end
+
+// --------------------------------------------------------------------------
+// Align the bus input on an int/short/byte - BIG ENDIAN
+// NOTE: Data must be aligned properly for the given type
+// (int on 4 byte boundary, short on 2 byte boundary, byte anywhere)
+// --------------------------------------------------------------------------
+box AlignBus32In[32](in byte, in word, in address[2], in dataIn[32]) is	
+	bit zWord[16] = 0[0:16];
+	bit zByte[8] = 0[0:8];
+	if (byte)
+		// 8 bit value (byte)
+		if (address == 0)
+			AlignBus32In = set(zByte, zByte, zByte, dataIn[24:8]);
+		elif (address == 1)
+			AlignBus32In = set(zByte, zByte, zByte, dataIn[16:8]);
+		elif (address == 2)
+			AlignBus32In = set(zByte, zByte, zByte, dataIn[8:8]);
+		else
+			AlignBus32In = set(zByte, zByte, zByte, dataIn[0:8]);
+		end
+	elif (word)
+		// 16 bit value (short)
+		if (address[1] == 0)
+			AlignBus32In = set(zWord, dataIn[16:16]);
+		else
+			AlignBus32In = set(zWord, dataIn[0:16]);
+		end
+	else
+		// 32 bit value (int)
+		AlignBus32In = dataIn;
+	end
+end
+
+// --------------------------------------------------------------------------
+// Align an int, short, or byte for a 32 bit bus - BIG ENDIAN
+// dataOut is aligned based on the type and address
+// byteMask gives the mask of bytes that get written
+// NOTE: Data must be aligned properly for the given type
+// (int on 4 byte boundary, short on 2 byte boundary, byte anywhere)
+// --------------------------------------------------------------------------
+box AlignBus32Out[32](in byte, in word, in address[2], in dataIn[32], 
+					  out byteMask[4]) is
+	bit zWord[16] = 0[0:16];
+	bit zByte[8] = 0[0:8];
+	if (byte)
+		// 8 bit value (byte)
+		if (address == 0)
+			AlignBus32Out = set(dataIn[0:8], zByte, zByte, zByte);
+			byteMask = 0b1000;
+		elif (address == 1)
+			AlignBus32Out = set(zByte, dataIn[0:8], zByte, zByte);
+			byteMask = 0b0100;
+		elif (address == 2)
+			AlignBus32Out = set(zByte, zByte, dataIn[0:8], zByte);
+			byteMask = 0b0010;
+		else
+			AlignBus32Out = set(zByte, zByte, zByte, dataIn[0:8]);
+			byteMask = 0b0001;
+		end
+	elif (word)
+		// 16 bit value (short)
+		if (address[1] == 0)
+			AlignBus32Out = set(dataIn[0:16], zWord);
+			byteMask = 0b1100;
+		else
+			AlignBus32Out = set(zWord, dataIn[0:16]);
+			byteMask = 0b0011;
+		end
+	else
+		// 32 bit value (int)
+		AlignBus32Out = dataIn;
+		byteMask = 0x0F;
+	end
+end
+
+// Returns TRUE if this is an illegal memory location
+// based on type
+box UnalignedMemory32[1](in byte, in word, in address[2]) is
+	UnalignedMemory32 = !byte * !word * (address[0] + address[1])
+						+ word * address[0];
+end
+
+// Demultiplex the CPU registers:
+//		Not extended: General purpose registers 0..15
+//		Extended: CC, RL, ...  R13, S(14), PC(15)
+box CpuRegDemux[18](in extended, in register[4]) is
+	CpuRegDemux[0] = !extended * (register == 0);
+	CpuRegDemux[1] = !extended * (register == 1);
+	CpuRegDemux[2] = !extended * (register == 2);
+	CpuRegDemux[3] = !extended * (register == 3);
+	CpuRegDemux[4] = !extended * (register == 4);
+	CpuRegDemux[5] = !extended * (register == 5);
+	CpuRegDemux[6] = !extended * (register == 6);
+	CpuRegDemux[7] = !extended * (register == 7);
+	CpuRegDemux[8] = !extended * (register == 8);
+	CpuRegDemux[9] = !extended * (register == 9);
+	CpuRegDemux[10] = !extended * (register == 10);
+	CpuRegDemux[11] = !extended * (register == 11);
+	CpuRegDemux[12] = !extended * (register == 12);
+	CpuRegDemux[13] = register == 13;
+	CpuRegDemux[14] = register == 14;
+	CpuRegDemux[15] = register == 15;
+	CpuRegDemux[16] = extended * (register == 0);
+	CpuRegDemux[17] = extended * (register == 1);
+end
+
+// Get a register:
+//		Not extended: General purpose registers 0..15
+//		Extended: CC, RL, ...  R13, S(14), PC(15)
+box CpuRegX[5](in extended, in register[4]) is
+	if (!extended)
+		// Not extended: R0..R15
+		CpuRegX = set(0[0], register);
+	elif (register[3] * register[2])
+		// Extended bit set, high registers: R12, R13, R14, R15		
+		CpuRegX = set (0[0], register);
+	else
+		// Extended: X0..X12 (CC, RL, IRET...)
+		CpuRegX = set(1[0], register);
+	end
+end
+
+
+
+// 20 bit register
+box Register20[20](in clock, in data[20]) is
+	Register20[0:8] = Register8(clock, data[0:8]);
+	Register20[8:8] = Register8(clock, data[8:8]);
+	Register20[16] = DFF(clock, data[16]);
+	Register20[17] = DFF(clock, data[17]);
+	Register20[18] = DFF(clock, data[18]);
+	Register20[19] = DFF(clock, data[19]);
+end
+
+
+// Un-finished push/pop unit
+box PushPop20(in registerFieldIn[20], 
+			  out registerFieldOut[20], out register[5]) is
+
+	// Generate lowest bit
+	bit bif[20] = registerFieldIn;
+	bit firstBit[20];
+	firstBit[0] = bif[0];
+	firstBit[1] = bif[1]*(bif[0] == 0);
+	firstBit[2] = bif[2]*(bif[0:2] == 0);
+	firstBit[3] = bif[3]*(bif[0:3] == 0);
+	firstBit[4] = bif[4]*(bif[0:4] == 0);
+	firstBit[5] = bif[5]*(bif[0:5] == 0);
+	firstBit[6] = bif[6]*(bif[0:6] == 0);
+	firstBit[7] = bif[7]*(bif[0:7] == 0);
+	firstBit[8] = bif[8]*(bif[0:8] == 0);
+	firstBit[9] = bif[9]*(bif[0:9] == 0);
+	firstBit[10] = bif[10]*(bif[0:10] == 0);
+	firstBit[11] = bif[11]*(bif[0:11] == 0);
+	firstBit[12] = bif[12]*(bif[0:12] == 0);
+	firstBit[13] = bif[13]*(bif[0:13] == 0);
+	firstBit[14] = bif[14]*(bif[0:14] == 0);
+	firstBit[15] = bif[15]*(bif[0:15] == 0);
+	firstBit[16] = bif[16]*(bif[0:16] == 0);
+	firstBit[17] = bif[17]*(bif[0:17] == 0);
+	firstBit[18] = bif[18]*(bif[0:18] == 0);
+	firstBit[19] = bif[19]*(bif[0:19] == 0);
+
+	registerFieldOut = !firstBit*registerFieldIn;
+	
+	// Generate the register number
+	register = dup(firstBit[0]) * 0[0:5]
+				+ dup(firstBit[1]) * 1[0:5]
+				+ dup(firstBit[2]) * 2[0:5]
+				+ dup(firstBit[3]) * 3[0:5]
+				+ dup(firstBit[4]) * 4[0:5]
+				+ dup(firstBit[5]) * 5[0:5]
+				+ dup(firstBit[6]) * 6[0:5]
+				+ dup(firstBit[7]) * 7[0:5]
+				+ dup(firstBit[8]) * 8[0:5]
+				+ dup(firstBit[9]) * 9[0:5]
+				+ dup(firstBit[10]) * 10[0:5]
+				+ dup(firstBit[11]) * 11[0:5]
+				+ dup(firstBit[12]) * 12[0:5]
+				+ dup(firstBit[13]) * 13[0:5]
+				+ dup(firstBit[14]) * 14[0:5]
+				+ dup(firstBit[15]) * 15[0:5]
+				+ dup(firstBit[16]) * 16[0:5]
+				+ dup(firstBit[17]) * 17[0:5]
+				+ dup(firstBit[18]) * 18[0:5]
+				+ dup(firstBit[19]) * 19[0:5];
+end
+
+
+// --------------------------------------------------------------------------
+// A 32 bit CPU
+//		Reset: Active low
+// --------------------------------------------------------------------------
+box CPU32(in reset, in clock, out read, out writeMask[4], 
+		  out addr[32], in dataInBus[32], out dataOutBus[32]) is
+
+	// Define CPU registers so they appear in the debug window first
+	bit cpuState[8];	
+	bit nextState[8];
+	bit r0[32];		bit r1[32];		bit r2[32];		bit r3[32];
+	bit r4[32];		bit r5[32];		bit r6[32];		bit r7[32];
+	bit r8[32];		bit r9[32];		bit r10[32];	bit r11[32];
+	bit r12[32];	bit r13[32];	bit rS[32];		bit rPC[32];
+	bit rCC[32];	bit	rL[32];
+
+	// Named registers
+	const int REG_S = 14;
+	const int REG_PC = 15;
+	const int REG_CC = 16;
+	const int REG_RL = 17;
+	
+	// ALU P1 always comes from a register
+	// ALU P2 comes from:
+	const int ALU_P2_REGISTER = 0;
+	const int ALU_P2_IMMEDIATE = 1;
+	const int ALU_P2_INDIRECT_READ = 2;
+	const int ALU_P2_ZERO = 3;
+
+	// CPU STATES and state register
+	const int S_RESET = 0;		// Reset CPU (all registers = 0)
+	const int S_RESET_SOFT = 1;	// Reset CPU (all registers = 0)
+	const int S_READ_VEC = 2;	// PC = [indirectAddress]
+	const int S_OP_CODE = 3;	// Read op code
+	const int S_IMMEDIATE = 4;	// Read immediate value (optional)
+	const int S_INDIRECT = 5;	// Read indirect
+	const int S_WRITE_BACK = 6;	// Write indirect
+	const int S_PUSH_POP = 7;
+
+		
+	// Data bus is locked in on the rising edge of the clock
+	bit dataIn[32] = Register32(clock, dataInBus);
+	
+	// opCode is locked on the rising edge of the clock 
+	// when the new state is S_OP_CODE
+	bit opCode[32] = Register32((nextState != S_OP_CODE)+clock, dataInBus);		
+
+
+	// **************************************************************
+	// Decode instruction
+	// **************************************************************
+
+	// Split op-code into fields
+	bit op[8] = opCode[24:8];			// Operation
+	bit opFieldM[4] = opCode[20:4];		// ALU instruction mode
+	bit opFieldD[4] = opCode[16:4];		// Destination register
+	bit opFieldS[4] = opCode[12:4];		// Source register #1
+	bit opFieldR[4] = opCode[8:4];		// Source register #2
+	bit opFieldAlu[5] = opCode[24:5];
+	bit modeBits[16] = DeMux4(opFieldM);
+
+	// Main opcode types (ALU and JMP)
+	bit pushPopOp = op * 0xFE[0:8] == 0x02;		// Push = 0x02, Pop = 0x03
+	bit branchOp = op * 0xF0[0:8] == 0x20;		// Branches are 0x20 to 0x2F
+	bit jsrOp = op * 0xF0[0:8] == 0x30;			// JSR ops are 0x30 to 0x3F
+	bit aluOp = op * 0xE0[0:8] == 0x40; 		// Alu ops are 0x40 to 0x5F
+
+	// Decode the instruction.  Normally, this will generate one cycle
+	// or two cycles when there is an indirect cycle.
+	bit indirectCycle = nextState == S_INDIRECT;
+	bit opType[3];
+	bit opImmediate[32];
+	bit needsImmediateRead; 	// Need an immediate cycle?
+	bit needsIndirectCycle;		// Need an indirect cycle?
+	bit indirectWriteBack;		// Need an indirect write back cycle?
+	bit sr1e[4];				// Source register 1 (execute cycle)
+	bit sr2e[4];				// Source register 2 (execute cycle)
+	bit sr1i[4];				// Source register 1 (indirect cycle)
+	bit sr2i[4];				// Source register 2 (indirect cycle)
+	bit aluP2e[2];				// Alu P2 (execute cycle)
+	bit aluP2i[2];				// Alu P2 (indirect cycle)
+	bit aluFuncE[5];			// Alu function (execute cycle) indirect is always an ADD
+	bit dr[4];					// Destination register (when useDR)
+	bit useDR;					// Use destination register (inc/dec [++R])
+	bit shiftAluP2Left[5];
+	bit extendedRegisters;
+	bit endResultAddrFromS1;	// Used for post inc/dec [R++]
+	bit savePCtoRL;
+	bit pushPopReg[5];
+	bit pushPopField[20];
+	bit pushPopFieldNext[20];
+
+	// **************************************************************
+	// CPU State Machine
+	// **************************************************************
+	
+	
+	cpuState = Register8(clock, nextState);
+	bit stateBits[16] = DeMux4(cpuState[0:4]) * dup(cpuState[4:4] == 0);		
+	
+	// Given the state of the previous read/write cycle,
+	// calculate the new state in nextState
+	bit executeOp;
+	bit pushPopDone;
+	bit softReset;	
+	if (reset)
+		// Hardware reset
+		nextState = S_RESET;
+	elif (stateBits[S_RESET])
+		// Load all registers with zero
+		nextState = S_RESET_SOFT;
+	elif (stateBits[S_RESET_SOFT])
+		// Setup to read vector
+		softReset = true;
+		nextState = S_READ_VEC;
+	elif (stateBits[S_READ_VEC])
+		// Read vector (PC = [indirectAddress])
+		nextState = S_OP_CODE;
+	elif (stateBits[S_OP_CODE])
+		if (opCode == 0xF1234567)
+			nextState = S_RESET;
+		elif (pushPopOp)
+			nextState = S_PUSH_POP;
+			executeOp = true;
+		elif (needsImmediateRead)
+			nextState = S_IMMEDIATE;
+		elif (needsIndirectCycle)
+			nextState = S_INDIRECT;
+		else
+			nextState = S_OP_CODE;
+			executeOp = true;
+		end
+	elif (stateBits[S_IMMEDIATE])
+		if (needsIndirectCycle)
+			nextState = S_INDIRECT;
+		else
+			nextState = S_OP_CODE;
+			executeOp = true;
+		end
+	elif (stateBits[S_INDIRECT])
+		executeOp = true;
+		if (indirectWriteBack)
+			nextState = S_WRITE_BACK;
+		else
+			nextState = S_OP_CODE;
+		end
+	elif (stateBits[S_WRITE_BACK])
+		nextState = S_OP_CODE;
+	elif (stateBits[S_PUSH_POP])
+		nextState = pushPopDone ? S_OP_CODE[0:8] : S_PUSH_POP[0:8];
+	else
+		nextState = S_RESET;
+	end
+
+
+
+	if (aluOp)
+		savePCtoRL = (opFieldAlu == ALU_LDJ) * executeOp;
+		aluFuncE = op[0:5];
+		if (modeBits[0] + modeBits[1])
+			// D = D op #16 - 16 bit integer immediate
+			opImmediate = set(dup(modeBits[1], 16), opCode[0:16]);
+			sr1e = opFieldD;
+			aluP2e = ALU_P2_IMMEDIATE;
+			opType = 4[0:3]; // Integer
+		elif (modeBits[2])
+			// D = S op #12 - 12 bit integer immediate
+			opImmediate = set(dup(opCode[11], 20), opCode[0:12]);
+			sr1e = opFieldS;
+			aluP2e = ALU_P2_IMMEDIATE;
+			opType = 4[0:3]; // Integer
+		elif (modeBits[3])
+			// D = S op #8(or#32) - 8 bit immediate (any type)
+			opImmediate = set(dup(opCode[11], 24), opCode[8:4], opCode[0:4]);
+			needsImmediateRead = opImmediate[0:8] == 0x80;
+			sr1e = opFieldS;
+			aluP2e = ALU_P2_IMMEDIATE;
+			opType = opCode[5:3];
+			extendedRegisters = opCode[4];
+		elif (modeBits[4])
+			// D = S op (R<<n)
+			sr1e = opFieldS;
+			sr2e = opFieldR;
+			shiftAluP2Left = set(0[0:2], opCode[0:3]);
+			opType = opCode[5:3];
+			extendedRegisters = opCode[4];
+		elif (modeBits[5])
+			// D = S op ([++R], [--R], [R++], [R--], [R])
+			needsIndirectCycle = true;
+			sr1i = opFieldR;
+			aluP2i = ALU_P2_IMMEDIATE;
+			sr2i = opFieldD; // Used only for ST instruction
+			sr1e = opFieldS;
+			aluP2e = ALU_P2_INDIRECT_READ;
+			opType = opCode[5:3];
+			useDR = indirectCycle;
+			dr = opFieldR;
+			endResultAddrFromS1 = indirectCycle * opCode[1]; // [R++], [R--]
+			opImmediate = set(dup(opCode[0]*!opCode[2], 31),
+									!opCode[2]); // -1, 1, or 0
+			shiftAluP2Left = dup(indirectCycle) * set(0[0:3], opType[1:2]);
+			extendedRegisters = opCode[4];
+		elif (modeBits[6])
+			// D = D op [S+(R<<n)]
+			needsIndirectCycle = true;
+			sr1i = opFieldS;
+			sr2i = opFieldR;
+			sr1e = opFieldD;
+			aluP2e = ALU_P2_INDIRECT_READ;
+			shiftAluP2Left = dup(indirectCycle) * set(0[0:2], opCode[0:3]);
+			opType = opCode[5:3];
+			extendedRegisters = opCode[4];
+			indirectWriteBack = aluOp*(opFieldAlu == ALU_ST);
+		elif (modeBits[7] 
+			+ modeBits[8] + modeBits[9] + modeBits[10] + modeBits[11])
+			// Mode 7   : D = S op [R+#~5ux] - Indexed from [R-1x] to [R-31x]
+			// Mode 8-11: D = S op [R+#5ux] - Indexed from [R+0x] to [R+127x]
+			opImmediate = set(dup(modeBits[7], 25), opFieldM[1], opFieldM[0], opCode[0:5]);
+			needsImmediateRead = modeBits[7] * (opCode[0:5] == 0);
+			needsIndirectCycle = true;
+			sr1i = opFieldR;
+			sr2i = opFieldD; // Used only for ST instruction						
+			aluP2i = ALU_P2_IMMEDIATE;
+			sr1e = opFieldS;
+			aluP2e = ALU_P2_INDIRECT_READ;
+			shiftAluP2Left = dup(indirectCycle) * set(0[0:3], opType[1:2]);
+			opType = opCode[5:3];
+		elif (modeBits[12] + modeBits[13] + modeBits[14])
+			// Mode 12: D = D op [R+#9ux] - Indexed from [R+0x] to [R+511x]
+			// Mode 13: D = D op [R+#9ux+512x] - Indexed from [R+0x] to [R+511x]
+			// Mode 14: D = D op ->[R+#9ux] - Indexed from [R+0x] to [R+511x]
+			opImmediate = set(dup(0[0], 22), opFieldM[0], opCode[12:4], opCode[0:5]);
+			needsImmediateRead = modeBits[14]*(opImmediate[0:9] == 0x1FF);
+			needsIndirectCycle = true;
+			sr1i = opFieldR;
+			sr2i = opFieldD; // Used only for ST instruction			
+			aluP2i = ALU_P2_IMMEDIATE;
+			sr1e = opFieldD;
+			aluP2e = ALU_P2_INDIRECT_READ;
+			shiftAluP2Left = dup(indirectCycle) * set(0[0:3], opType[1:2]);
+			opType = opCode[5:3];
+			indirectWriteBack = modeBits[14]; // D = D op ->[R+#9ux]
+		end
+	elif (branchOp)
+		aluFuncE = ALU_ADD[0:5];
+		opImmediate = set(dup(opCode[23],6), opCode[0:24], 0[0:2]);
+		needsImmediateRead = opCode[0:24] == 0x800000;
+		sr1e = REG_PC;
+		aluP2e = Branch(op[0:4], rCC[3], rCC[2], rCC[1], rCC[0]) 
+					? ALU_P2_IMMEDIATE[0:2] : ALU_P2_ZERO[0:2];
+		opType = 4[0:3];
+	elif (jsrOp)
+		// NOTE: ALU function is set to LD for JSR, and ADD for BSR
+		aluFuncE = op[0] ? ALU_ADD[0:5] : ALU_LD[0:5]; // BSR or JMP
+		opImmediate = set(dup(opCode[23],6), opCode[0:24], 0[0:2]);
+		needsImmediateRead = opCode[0:24] == 0x800000;
+		sr1e = REG_PC;
+		aluP2e = ALU_P2_IMMEDIATE;
+		opType = 4[0:3];
+		savePCtoRL = true;
+	elif (pushPopOp)
+		// NOTE: Pop not yet implemented
+		pushPopField = Register20(clock, nextState == S_OP_CODE ? dataInBus[0:20] : pushPopFieldNext);
+		PushPop20(pushPopField, pushPopFieldNext, pushPopReg);
+		pushPopDone = pushPopField == 0;
+		sr1e = REG_S;
+		sr2e = pushPopReg[0:4];
+		extendedRegisters = pushPopReg[4]; // NOTE: rS is the same with extendedRegisters
+		aluP2e = ALU_P2_IMMEDIATE;
+		aluFuncE = ALU_SUB;
+		useDR = true;
+		dr = REG_S[0:4];
+		//endResultAddrFromS1 = true;
+		opImmediate = 4;
+		opType = 4;
+	end
+	
+	// Get source registers and ALU function based on CPU state
+	bit sr1[4] = indirectCycle ? sr1i : sr1e;
+	bit sr2[4] = indirectCycle ? sr2i : sr2e;
+	bit aluP2mode[2] = indirectCycle ? aluP2i : aluP2e;
+	bit aluFunction[5] = indirectCycle ? ALU_ADD[0:5] : aluFuncE;
+	bit immediateValue[32] = stateBits[S_IMMEDIATE] ? dataIn : opImmediate;
+	bit destRegister[4] = useDR ? dr : opFieldD;
+	
+	// Update the destination register when the clock goes low:
+	//		Update all registers on soft reset (to zero)
+	//		Update only on executeOp (override when useDR)
+	//		Do not update for ALU_ST, ALU_CMP and ALU_BIT
+	bit suppressDestWrite = aluOp*((opFieldAlu == ALU_ST)
+									+ (opFieldAlu == ALU_CMP)
+									+ (opFieldAlu == ALU_BIT));
+	bit allowDestWrite = executeOp*aluOp*!suppressDestWrite + useDR;
+	
+	// **************************************************************
+	// CPU Registers
+	// **************************************************************	
+	
+	// Registers get written on the falling edge of the clock
+	// NOTE: We can save a lot of gates by using latches
+	// instead of registers, but the result must still be
+	// latched on the falling edge of the clock.
+	bit aluResult[32];
+	bit aluLatched[32] = Latch32(softReset + clock, aluResult*dup(!softReset));
+
+	// Demultiplex destination register
+	bit destRegBits[18] = CpuRegDemux(extendedRegisters, destRegister)
+					*dup(allowDestWrite) + dup(softReset);
+
+	// Combines with aluLatched above to lock on the falling edge
+	r0 = Latch32(!clock*destRegBits[0], aluLatched);
+	r1 = Latch32(!clock*destRegBits[1], aluLatched);
+	r2 = Latch32(!clock*destRegBits[2], aluLatched);
+	r3 = Latch32(!clock*destRegBits[3], aluLatched);
+	r4 = Latch32(!clock*destRegBits[4], aluLatched);
+	r5 = Latch32(!clock*destRegBits[5], aluLatched);
+	r6 = Latch32(!clock*destRegBits[6], aluLatched);
+	r7 = Latch32(!clock*destRegBits[7], aluLatched);
+	r8 = Latch32(!clock*destRegBits[8], aluLatched);
+	r9 = Latch32(!clock*destRegBits[9], aluLatched);
+	r10 = Latch32(!clock*destRegBits[10], aluLatched);
+	r11 = Latch32(!clock*destRegBits[11], aluLatched);
+	r12 = Latch32(!clock*destRegBits[12], aluLatched);
+	r13 = Latch32(!clock*destRegBits[13], aluLatched);
+	rS = Latch32(!clock*destRegBits[14], aluLatched);
+		
+	// Calculate the new PC based on CPU state	
+	bit newPC[32];
+	if (stateBits[S_READ_VEC])
+		newPC = dataIn;
+	elif (stateBits[S_OP_CODE] + stateBits[S_IMMEDIATE])
+		newPC = Add4(rPC);
+	else
+		// stateBits[S_INDIRECT]
+		// stateBits[S_WRITE_BACK]
+		// stateBits[S_PUSH_POP])
+		newPC = rPC;
+	end
+
+	// The PC (R15) is latched on the falling edge of the clock
+	// The result comes first from the result of the instruction 
+	// (i.e. latchReg[15) otherwise from newPC.
+	bit quickPC[32] = destRegBits[REG_PC] + (jsrOp+branchOp)*executeOp 
+							? aluResult : newPC;
+	rPC = Register32(!clock, quickPC);						
+
+	// Extended register: CC (R16)
+	bit c; bit v; bit n; bit z;	
+	bit newCC[32] = softReset ? 0[0:32] : set(rCC[4:28], c, v, n, z);
+	bit latchCC = softReset + executeOp*aluOp + destRegBits[REG_CC];
+	rCC = Register32(!clock*latchCC, newCC);
+	
+	// Extended register: RL (R17)
+	rL = Register32(!clock*(destRegBits[REG_RL] + savePCtoRL), 
+						savePCtoRL ? newPC : aluLatched);
+	
+	// The indirect address comes from the ALU (or source 1 for
+	// post inc/dec), and gets latched during an indirect instruction
+	bit endResultAddr[32];	
+	bit indirectAddress[32] = Register32(!clock*(indirectCycle+softReset), 
+								endResultAddr);
+	
+	// **************************************************************
+	// Retrieve operands from register file (sr1, sr2)
+	// and get alu operand P2 (aluP2mode)
+	// **************************************************************
+	
+	// Source register 1 comes from opcode field D, S, or R, depending on
+	// instruction type and whether or not this is an indirect address.
+	bit source2Bits[18];
+	bit source1Bits[18] = CpuRegDemux(extendedRegisters, sr1);
+	bit source1Reg[32] = r0 * dup(source1Bits[0])
+					+ r1 * dup(source1Bits[1])
+					+ r2 * dup(source1Bits[2])
+					+ r3 * dup(source1Bits[3])
+					+ r4 * dup(source1Bits[4])
+					+ r5 * dup(source1Bits[5])
+					+ r6 * dup(source1Bits[6])
+					+ r7 * dup(source1Bits[7])
+					+ r8 * dup(source1Bits[8])
+					+ r9 * dup(source1Bits[9])
+					+ r10 * dup(source1Bits[10])
+					+ r11 * dup(source1Bits[11])
+					+ r12 * dup(source1Bits[12])
+					+ r13 * dup(source1Bits[13])
+					+ rS * dup(source1Bits[14])
+					+ newPC * dup(source1Bits[REG_PC])
+					+ rCC * dup(source1Bits[REG_CC])
+					+ rL * dup(source2Bits[REG_RL]);
+
+	// Source register 2 comes from the immediate value, the indirect
+	// data, or register (opcode field R), depending on instruction type
+	source2Bits = CpuRegDemux(extendedRegisters, sr2);
+	bit source2Reg[32] = r0 * dup(source2Bits[0])
+					+ r1 * dup(source2Bits[1])
+					+ r2 * dup(source2Bits[2])
+					+ r3 * dup(source2Bits[3])
+					+ r4 * dup(source2Bits[4])
+					+ r5 * dup(source2Bits[5])
+					+ r6 * dup(source2Bits[6])
+					+ r7 * dup(source2Bits[7])
+					+ r8 * dup(source2Bits[8])
+					+ r9 * dup(source2Bits[9])
+					+ r10 * dup(source2Bits[10])
+					+ r11 * dup(source2Bits[11])
+					+ r12 * dup(source2Bits[12])
+					+ r13 * dup(source2Bits[13])
+					+ rS * dup(source2Bits[14])
+					+ newPC * dup(source2Bits[REG_PC])
+					+ rCC * dup(source1Bits[REG_CC])
+					+ rL * dup(source2Bits[REG_RL]);
+					
+	// Align memory bus input - sign extended in the execute phase.
+	// Address must be aligned properly for the given type.
+	bit opType8Bits = opType[1:2] == 0;
+	bit opType16Bits = opType[1:2] == 1;
+	bit dataInAligned[32] = AlignBus32In(opType8Bits, opType16Bits,
+										 indirectAddress[0:2], dataIn);
+										 					
+	// ALU P2
+	bit aluP2[32] =   source2Reg * dup(aluP2mode == ALU_P2_REGISTER)
+					+ immediateValue * dup(aluP2mode == ALU_P2_IMMEDIATE)
+					+ dataInAligned * dup(aluP2mode == ALU_P2_INDIRECT_READ);
+
+	// Depending on instruction type, sign extend source2
+	bit extendByte = aluOp * executeOp * opType8Bits;
+	bit extendShort = aluOp * executeOp * opType16Bits;
+	bit aluP2ex[32] = Extend32(opType[0], extendByte, extendShort, aluP2);
+	
+	// **************************************************************
+	// Execute - use the ALU to compute (source1 op source2)
+	// **************************************************************
+	
+	// Calculate the result of this instruction
+	ALU32(aluFunction, rCC[3], rCC[2],
+			source1Reg, aluP2ex, shiftAluP2Left, aluResult, 
+			c, v, n, z);	
+	
+	// **************************************************************
+	// Send results to the data bus
+	// **************************************************************
+
+	// The indirect address comes from the ALU (add immediate), or 
+	// directly from source register 1 for post inc/dec
+	endResultAddr = endResultAddrFromS1 ? source1Reg : aluResult;
+
+	// Data out comes from the ALU for write-back indirect
+	// or from source2Reg for a ST instruction
+
+	// Calculate the result of this cycle.
+	bit quickAddr[32];
+	bit write;
+	if (nextState == S_READ_VEC)
+		read = !clock;
+		quickAddr = indirectAddress;
+	elif ((nextState == S_OP_CODE) + (nextState == S_IMMEDIATE))
+		read = !clock;
+		quickAddr = quickPC;
+	elif (nextState == S_INDIRECT)
+		read = !clock*(opFieldAlu != ALU_ST);
+		write = opFieldAlu == ALU_ST;
+		quickAddr = endResultAddr;
+	elif (nextState == S_WRITE_BACK)
+		write = true;
+		quickAddr = indirectAddress;
+	elif (nextState == S_PUSH_POP)
+		write = op[0];
+		quickAddr = endResultAddr;
+	end
+
+	// Align bus data output based on type (byte, short, int) and address
+	bit busByteMask[4];
+	bit dataOut[32] = AlignBus32Out(opType8Bits, opType16Bits, 
+								quickAddr[0:2],
+					(nextState == S_WRITE_BACK) ? aluResult : source2Reg, 
+								busByteMask);
+		
+	// Latch the CPU outputs while the clock is low
+	addr = Latch32(clock, set(quickAddr[2:30], 0[0:2]));
+	dataOutBus = Latch32(clock, dataOut);
+	writeMask = dup(!clock)*Latch4(clock, dup(write)*busByteMask); 	
+end
+
+
+box CPU32NoLocals(in reset, in clock, out read, out writeMask[4],
+		  out addr[32], in dataInBus[32], out dataOutBus[32]) is
+	CPU32(reset, clock, read, writeMask, addr, dataInBus, dataOutBus);
+end
